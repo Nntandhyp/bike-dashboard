@@ -1,163 +1,198 @@
-# =========================
-# IMPORT LIBRARY
-# =========================
 import os
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import seaborn as sns
 import streamlit as st
 
-# =========================
-# CONFIG STREAMLIT
-# =========================
+# ── Page Config ───────────────────────────────────────────
 st.set_page_config(page_title="Bike Sharing Dashboard", layout="wide")
 
-# =========================
-# LOAD DATA (ANTI ERROR PATH)
-# =========================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "..", "data")
+# ── Load Data ─────────────────────────────────────────────
+@st.cache_data
+def load_data():
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    day_df  = pd.read_csv(os.path.join(BASE_DIR, 'data', 'day.csv'))
+    hour_df = pd.read_csv(os.path.join(BASE_DIR, 'data', 'hour.csv'))
 
-day_df = pd.read_csv(os.path.join(DATA_DIR, "day.csv"))
-hour_df = pd.read_csv(os.path.join(DATA_DIR, "hour.csv"))
+    for df in [day_df, hour_df]:
+        df['dteday']     = pd.to_datetime(df['dteday'])
+        df['season']     = df['season'].map({1:'Spring',2:'Summer',3:'Fall',4:'Winter'})
+        df['yr']         = df['yr'].map({0:'2011',1:'2012'})
+        df['weathersit'] = df['weathersit'].map({1:'Clear',2:'Mist',3:'Light Rain/Snow',4:'Heavy Rain/Snow'})
+        df['workingday'] = df['workingday'].map({0:'No',1:'Yes'})
+        df['holiday']    = df['holiday'].map({0:'No',1:'Yes'})
 
-day_df["dteday"] = pd.to_datetime(day_df["dteday"])
-hour_df["dteday"] = pd.to_datetime(hour_df["dteday"])
+    def categorize_time(h):
+        if 5 <= h < 11:
+            return 'Morning'
+        elif 11 <= h < 15:
+            return 'Afternoon'
+        elif 15 <= h < 19:
+            return 'Evening'
+        else:
+            return 'Night'
 
-# =========================
-# TITLE
-# =========================
-st.title("🚴 Bike Sharing Dashboard")
-st.write("Analisis pola penyewaan sepeda berdasarkan waktu, cuaca, dan jenis pengguna")
+    hour_df['time_category'] = hour_df['hr'].apply(categorize_time)
+    return day_df, hour_df
 
+day_df, hour_df = load_data()
+
+# ── Header ────────────────────────────────────────────────
+st.title("🚲 Bike Sharing Dashboard")
+st.markdown("Analisis pola penyewaan sepeda periode **2011–2012**")
 st.divider()
 
-# =========================
-# SIDEBAR FILTER
-# =========================
+# ── Sidebar Filter ────────────────────────────────────────
 st.sidebar.header("Filter Data")
-
-start_date, end_date = st.sidebar.date_input(
-    "Pilih rentang tanggal",
-    [day_df["dteday"].min(), day_df["dteday"].max()]
+year_filter = st.sidebar.multiselect(
+    "Pilih Tahun",
+    options=['2011', '2012'],
+    default=['2011', '2012']
 )
 
-day_filtered = day_df[
-    (day_df["dteday"] >= pd.to_datetime(start_date)) &
-    (day_df["dteday"] <= pd.to_datetime(end_date))
-]
+day_filtered  = day_df[day_df['yr'].isin(year_filter)]
+hour_filtered = hour_df[hour_df['yr'].isin(year_filter)]
 
-hour_filtered = hour_df[
-    (hour_df["dteday"] >= pd.to_datetime(start_date)) &
-    (hour_df["dteday"] <= pd.to_datetime(end_date))
-]
-
-# =========================
-# KPI SECTION
-# =========================
-st.subheader("📊 Ringkasan Data")
-
+# ── Metrics ───────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
-
-col1.metric("Total Penyewaan", int(day_filtered["cnt"].sum()))
-col2.metric("Rata-rata Harian", int(day_filtered["cnt"].mean()))
-col3.metric("Total Registered User", int(day_filtered["registered"].sum()))
-
+col1.metric("Total Penyewaan",   f"{day_filtered['cnt'].sum():,.0f}")
+col2.metric("Rata-rata Harian",  f"{day_filtered['cnt'].mean():,.0f}")
+col3.metric("Rata-rata per Jam", f"{hour_filtered['cnt'].mean():,.0f}")
 st.divider()
 
-# =========================
-# 1. POLA WAKTU
-# =========================
-st.subheader("⏰ Pola Penyewaan Berdasarkan Waktu")
+# ── Q1: Kategori Waktu ────────────────────────────────────
+st.subheader("1. Rata-rata Penyewaan Berdasarkan Kategori Waktu")
 
-def time_category(hour):
-    if 5 <= hour < 11:
-        return "Pagi"
-    elif 11 <= hour < 15:
-        return "Siang"
-    elif 15 <= hour < 19:
-        return "Sore"
-    else:
-        return "Malam"
-
-hour_filtered["time_cat"] = hour_filtered["hr"].apply(time_category)
-
-time_data = hour_filtered.groupby("time_cat")["cnt"].mean().reindex(
-    ["Pagi", "Siang", "Sore", "Malam"]
+time_order = ['Morning', 'Afternoon', 'Evening', 'Night']
+time_usage = (
+    hour_filtered
+    .groupby('time_category')['cnt']
+    .mean()
+    .reindex(time_order)
+    .reset_index()
 )
 
-fig, ax = plt.subplots()
-ax.bar(time_data.index, time_data.values)
-ax.set_ylabel("Rata-rata Penyewaan")
-ax.set_title("Pola Penyewaan Berdasarkan Waktu")
-st.pyplot(fig)
-
+fig1, ax1 = plt.subplots(figsize=(8, 4))
+bar_colors = [
+    '#2E5A88' if v == time_usage['cnt'].max() else '#D3D3D3'
+    for v in time_usage['cnt']
+]
+sns.barplot(data=time_usage, x='time_category', y='cnt', palette=bar_colors, ax=ax1)
+for p in ax1.patches:
+    ax1.annotate(
+        f'{p.get_height():.0f}',
+        (p.get_x() + p.get_width() / 2, p.get_height()),
+        ha='center', va='bottom', fontweight='bold'
+    )
+ax1.set_title('Rata-rata Penyewaan per Kategori Waktu')
+ax1.set_xlabel('Kategori Waktu')
+ax1.set_ylabel('Rata-rata Penyewaan')
+sns.despine()
+st.pyplot(fig1)
+st.caption("Evening (sore) memiliki rata-rata penyewaan tertinggi — mencerminkan pola commuting pulang kerja.")
 st.divider()
 
-# =========================
-# 2. CUACA
-# =========================
-st.subheader("🌤 Pengaruh Cuaca")
+# ── Q2: Kondisi Cuaca ─────────────────────────────────────
+st.subheader("2. Rata-rata Penyewaan Berdasarkan Kondisi Cuaca")
 
-weather_map = {
-    1: "Cerah",
-    2: "Berkabut",
-    3: "Hujan Ringan",
-    4: "Hujan Berat"
-}
+weather_usage = (
+    hour_filtered
+    .groupby('weathersit')['cnt']
+    .mean()
+    .reset_index()
+    .sort_values('cnt', ascending=False)
+)
 
-hour_filtered["weather"] = hour_filtered["weathersit"].map(weather_map)
-
-weather_data = hour_filtered.groupby("weather")["cnt"].mean().reset_index()
-
-fig, ax = plt.subplots()
-sns.barplot(data=weather_data, x="weather", y="cnt", ax=ax)
+fig2, ax2 = plt.subplots(figsize=(8, 4))
+bar_colors2 = [
+    '#2E5A88' if i == 0 else '#D3D3D3'
+    for i in range(len(weather_usage))
+]
+sns.barplot(data=weather_usage, x='weathersit', y='cnt', palette=bar_colors2, ax=ax2)
+for p in ax2.patches:
+    ax2.annotate(
+        f'{p.get_height():.0f}',
+        (p.get_x() + p.get_width() / 2, p.get_height()),
+        ha='center', va='bottom', fontweight='bold'
+    )
+ax2.set_title('Rata-rata Penyewaan per Kondisi Cuaca')
+ax2.set_xlabel('Kondisi Cuaca')
+ax2.set_ylabel('Rata-rata Penyewaan')
 plt.xticks(rotation=15)
-ax.set_title("Pengaruh Cuaca terhadap Penyewaan")
-st.pyplot(fig)
-
+sns.despine()
+st.pyplot(fig2)
+st.caption("Cuaca Clear menghasilkan penyewaan tertinggi. Semakin buruk cuaca, semakin turun jumlah penyewaan.")
 st.divider()
 
-# =========================
-# 3. WORKING DAY
-# =========================
-st.subheader("📅 Hari Kerja vs Hari Libur")
+# ── Q3: Hari Kerja vs Libur ───────────────────────────────
+st.subheader("3. Rata-rata Penyewaan: Hari Kerja vs Hari Libur")
 
-working = day_filtered.groupby("workingday")["cnt"].mean().reset_index()
-
-fig, ax = plt.subplots()
-ax.bar(working["workingday"], working["cnt"])
-ax.set_xticks([0, 1])
-ax.set_xticklabels(["Libur", "Kerja"])
-ax.set_title("Rata-rata Penyewaan: Hari Kerja vs Libur")
-st.pyplot(fig)
-
-st.divider()
-
-# =========================
-# 4. USER TYPE
-# =========================
-st.subheader("👥 Jenis Pengguna")
-
-fig, ax = plt.subplots()
-ax.pie(
-    [day_filtered["casual"].sum(), day_filtered["registered"].sum()],
-    labels=["Casual", "Registered"],
-    autopct="%1.1f%%"
+working_usage = (
+    day_filtered
+    .groupby('workingday')['cnt']
+    .mean()
+    .reset_index()
 )
-ax.set_title("Distribusi Pengguna")
-st.pyplot(fig)
 
+fig3, ax3 = plt.subplots(figsize=(6, 4))
+sns.barplot(
+    data=working_usage, x='workingday', y='cnt',
+    palette=['#D3D3D3', '#2E5A88'], ax=ax3
+)
+for p in ax3.patches:
+    ax3.annotate(
+        f'{p.get_height():.0f}',
+        (p.get_x() + p.get_width() / 2, p.get_height()),
+        ha='center', va='bottom', fontweight='bold'
+    )
+ax3.set_title('Rata-rata Penyewaan: Hari Kerja vs Hari Libur')
+ax3.set_xlabel('Hari Kerja (No = Libur, Yes = Kerja)')
+ax3.set_ylabel('Rata-rata Penyewaan')
+sns.despine()
+st.pyplot(fig3)
+st.caption("Hari kerja memiliki rata-rata penyewaan lebih tinggi — sepeda lebih banyak digunakan untuk transportasi rutin.")
 st.divider()
 
-# =========================
-# INSIGHT
-# =========================
-st.subheader("💡 Insight")
+# ── Q4: Clustering Jam ────────────────────────────────────
+st.subheader("4. Clustering Jam Operasional Berdasarkan Tingkat Demand")
 
-st.write("""
-- Penyewaan tertinggi terjadi pada pagi dan sore hari (pola aktivitas kerja)
-- Cuaca cerah meningkatkan jumlah penyewaan secara signifikan
-- Hari kerja memiliki rata-rata lebih tinggi dibanding hari libur
-- Pengguna registered mendominasi penggunaan layanan
-""")
+hourly_avg = (
+    hour_filtered
+    .groupby('hr')['cnt']
+    .mean()
+    .reset_index()
+)
+hourly_avg.columns = ['hr', 'avg_cnt']
+hourly_avg['demand_level'] = pd.cut(
+    hourly_avg['avg_cnt'],
+    bins=[0, 100, 250, 500],
+    labels=['Low Demand', 'Medium Demand', 'High Demand']
+)
+
+color_map = {
+    'Low Demand':    '#D3D3D3',
+    'Medium Demand': '#88B4D4',
+    'High Demand':   '#2E5A88'
+}
+bar_colors3 = [color_map[str(lv)] for lv in hourly_avg['demand_level']]
+
+fig4, ax4 = plt.subplots(figsize=(12, 4))
+ax4.bar(hourly_avg['hr'], hourly_avg['avg_cnt'], color=bar_colors3)
+
+legend_elements = [
+    mpatches.Patch(facecolor=v, label=k)
+    for k, v in color_map.items()
+]
+ax4.legend(handles=legend_elements, title='Demand Level', loc='upper left')
+ax4.set_title('Clustering Jam Operasional Berdasarkan Tingkat Demand')
+ax4.set_xlabel('Jam (00:00 - 23:00)')
+ax4.set_ylabel('Rata-rata Penyewaan')
+ax4.set_xticks(range(0, 24))
+sns.despine()
+st.pyplot(fig4)
+st.caption("Jam sibuk (High Demand) terkonsentrasi pada pagi 07-09 dan sore 16-19. Jam dini hari masuk kategori Low Demand.")
+
+st.divider()
+st.markdown("© 2024 Bike Sharing Dashboard | Dibuat dengan Streamlit")
